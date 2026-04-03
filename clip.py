@@ -14,8 +14,26 @@ from core.clip_orchestrator import (
     run_clip,
 )
 from core.forward_upon_wide import parse_forward_upon_wide_h
-from core.openpilot_bootstrap import bootstrap_openpilot, ensure_openpilot_checkout
-from core.openpilot_config import default_local_openpilot_root, default_openpilot_branch, default_openpilot_repo_url
+
+# openpilot imports are conditional — they're only needed for UI render types
+# (ui, ui-alt, driver-debug) and will fail on platforms where openpilot isn't
+# installed (e.g. Windows without WSL). Non-UI render types (forward, wide,
+# driver, 360, etc.) work with just Python + FFmpeg.
+_openpilot_available = True
+try:
+    from core.openpilot_bootstrap import bootstrap_openpilot, ensure_openpilot_checkout
+    from core.openpilot_config import default_local_openpilot_root, default_openpilot_branch, default_openpilot_repo_url
+except ImportError:
+    _openpilot_available = False
+
+    def default_local_openpilot_root() -> str:
+        return str(Path.home() / ".op-replay-clipper" / "openpilot")
+
+    def default_openpilot_branch() -> str:
+        return "master"
+
+    def default_openpilot_repo_url() -> str:
+        return "https://github.com/commaai/openpilot.git"
 
 
 DEMO_ROUTE = "5beb9b58bd12b691|0000010a--a51155e496"
@@ -83,6 +101,14 @@ def _prepare_openpilot_if_needed(args: argparse.Namespace) -> str:
     openpilot_dir = str(openpilot_path)
     if not is_openpilot_render_type(args.render_type):
         return openpilot_dir
+
+    # UI render types require openpilot — fail early if modules aren't available
+    if not _openpilot_available:
+        raise SystemExit(
+            f"Render type '{args.render_type}' requires openpilot, but openpilot modules are not installed. "
+            "On Linux/macOS, run ./install.sh. On Windows, use WSL."
+        )
+
     if args.skip_openpilot_update and not openpilot_path.exists():
         raise SystemExit(
             f"Openpilot checkout not found at {openpilot_dir}. Remove --skip-openpilot-update or point --openpilot-dir at an existing checkout."

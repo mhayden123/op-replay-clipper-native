@@ -6,9 +6,12 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import socket
+import subprocess as _subprocess
+import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +30,20 @@ from pydantic import BaseModel
 app = FastAPI(title="OP Replay Clipper")
 log = logging.getLogger("clipper.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+
+PLATFORM = platform.system()  # "Linux", "Darwin", "Windows"
+IS_LINUX = PLATFORM == "Linux"
+IS_MACOS = PLATFORM == "Darwin"
+IS_WINDOWS = PLATFORM == "Windows"
+
+# Render types that require openpilot (UI rendering engine)
+OPENPILOT_RENDER_TYPES = {"ui", "ui-alt", "driver-debug"}
+# Render types that work with just Python + FFmpeg (no openpilot needed)
+STANDALONE_RENDER_TYPES = {"forward", "wide", "driver", "360", "forward_upon_wide", "360_forward_upon_wide"}
 
 # ---------------------------------------------------------------------------
 # Native configuration (replaces Docker env vars)
@@ -52,10 +69,41 @@ _has_gpu: bool | None = None
 
 
 def _detect_gpu() -> bool:
+    """Detect GPU acceleration capability (NVIDIA on Linux, VideoToolbox on macOS)."""
     global _has_gpu
     if _has_gpu is None:
-        _has_gpu = shutil.which("nvidia-smi") is not None and os.system("nvidia-smi >/dev/null 2>&1") == 0
+        if IS_MACOS:
+            # macOS always has VideoToolbox hardware acceleration
+            _has_gpu = True
+        elif IS_WINDOWS:
+            _has_gpu = shutil.which("nvidia-smi") is not None and os.system("nvidia-smi >nul 2>&1") == 0
+        else:
+            _has_gpu = shutil.which("nvidia-smi") is not None and os.system("nvidia-smi >/dev/null 2>&1") == 0
     return _has_gpu
+
+
+def _detect_wsl() -> bool:
+    """Detect if WSL is available on Windows."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        result = _subprocess.run(
+            ["wsl.exe", "--list", "--verbose"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0 and "Running" in result.stdout
+    except (FileNotFoundError, _subprocess.TimeoutExpired):
+        return False
+
+
+def _open_path(path: str) -> None:
+    """Open a file or folder with the system default application."""
+    if IS_MACOS:
+        _subprocess.Popen(["open", path])
+    elif IS_WINDOWS:
+        os.startfile(path)  # type: ignore[attr-defined]
+    else:
+        _subprocess.Popen(["xdg-open", path])
 
 
 VALID_RENDER_TYPES = {
@@ -153,17 +201,50 @@ class JobResponse(BaseModel):
 # Native clip.py invocation (replaces _build_docker_cmd + _run_container)
 # ---------------------------------------------------------------------------
 
-def _build_clip_cmd(job: Job, req: ClipRequestBody) -> list[str]:
-    """Build the ``uv run python clip.py`` command for native execution.
+def _build_clip_cmd(job: Job, req: ClipRequestBody) -> tuple[list[str], str | None]:
+    """Build the clip.py command for native or WSL execution.
 
-    This replaces ``_build_docker_cmd()`` from the Docker version.
-    Instead of ``docker run ... <image> <args>``, we invoke clip.py directly
-    as a subprocess using ``uv run`` within the clipper's project directory.
+    Returns (command, cwd) where cwd is the working directory.
+    On Windows with UI render types, wraps the command in wsl.exe invocation.
     """
     job_dir = OUTPUT_DIR / job.job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     output_path = str(job_dir / "output.mp4")
 
+    # On Windows with UI render types, delegate to WSL
+    use_wsl = IS_WINDOWS and req.render_type in OPENPILOT_RENDER_TYPES
+
+    if use_wsl:
+        # Convert Windows output path to /mnt/c/ path for WSL
+        win_path = output_path.replace("\\", "/")
+        if win_path[1] == ":":
+            wsl_output = f"/mnt/{win_path[0].lower()}{win_path[2:]}"
+        else:
+            wsl_output = output_path
+
+        inner_args = [
+            "uv", "run", "python", "clip.py",
+            req.render_type, req.route,
+            "-o", wsl_output,
+            "-m", str(req.file_size_mb),
+            "--file-format", req.file_format,
+            "--skip-openpilot-update",
+            "--skip-openpilot-bootstrap",
+            "--accel", "cpu",
+        ]
+        if req.render_type in SMEAR_RENDER_TYPES:
+            inner_args.extend(["--smear-seconds", str(req.smear_seconds)])
+        if req.jwt_token and req.download_source != "ssh":
+            inner_args.extend(["-j", req.jwt_token])
+        if req.download_source == "ssh":
+            inner_args.extend(["--download-source", "ssh", "--device-ip", req.device_ip, "--ssh-port", str(req.ssh_port)])
+
+        wsl_cmd_str = " ".join(inner_args)
+        cmd = ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-c",
+               f"cd ~/.op-replay-clipper-native && {wsl_cmd_str}"]
+        return cmd, None  # cwd=None for WSL, it handles its own directory
+
+    # Native execution
     cmd: list[str] = [
         "uv", "run", "python", "clip.py",
         req.render_type,
@@ -178,7 +259,9 @@ def _build_clip_cmd(job: Job, req: ClipRequestBody) -> list[str]:
     ]
 
     # GPU acceleration
-    if _detect_gpu():
+    if IS_MACOS:
+        cmd.extend(["--accel", "videotoolbox"])
+    elif _detect_gpu():
         cmd.extend(["--accel", "nvidia"])
     else:
         cmd.extend(["--accel", "cpu"])
@@ -199,7 +282,7 @@ def _build_clip_cmd(job: Job, req: ClipRequestBody) -> list[str]:
             "--ssh-port", str(req.ssh_port),
         ])
 
-    return cmd
+    return cmd, str(PROJECT_ROOT)
 
 
 async def _run_clip(job: Job, req: ClipRequestBody) -> None:
@@ -210,7 +293,7 @@ async def _run_clip(job: Job, req: ClipRequestBody) -> None:
     the command source changes (subprocess instead of Docker container).
     """
     try:
-        cmd = _build_clip_cmd(job, req)
+        cmd, cwd = _build_clip_cmd(job, req)
         job.state = JobState.running
         job.logs.append(f"$ uv run python clip.py {req.render_type} {req.route} ...")
 
@@ -218,7 +301,7 @@ async def _run_clip(job: Job, req: ClipRequestBody) -> None:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(PROJECT_ROOT),
+            cwd=cwd,
         )
 
         assert proc.stdout is not None
@@ -377,19 +460,55 @@ async def index() -> HTMLResponse:
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    """Health check — reports native environment status instead of Docker."""
+    """Health check — reports native environment status."""
     gpu = _detect_gpu()
     uv_ok = shutil.which("uv") is not None
-    openpilot_ok = (OPENPILOT_DIR / ".venv" / "bin" / "python").exists()
+    python_venv = "bin/python" if not IS_WINDOWS else "Scripts/python.exe"
+    openpilot_ok = (OPENPILOT_DIR / ".venv" / python_venv).exists()
     clip_ok = (PROJECT_ROOT / "clip.py").exists()
     return {
         "native": True,
+        "platform": PLATFORM.lower(),
         "uv": uv_ok,
         "openpilot": openpilot_ok,
         "clip_py": clip_ok,
         "gpu": gpu,
+        "gpu_type": "videotoolbox" if IS_MACOS else ("nvidia" if gpu and not IS_MACOS else "none"),
         "openpilot_dir": str(OPENPILOT_DIR),
         "output_dir": str(OUTPUT_DIR),
+    }
+
+
+@app.get("/api/platform")
+async def platform_info() -> dict[str, Any]:
+    """Report which render types are available on this platform."""
+    gpu = _detect_gpu()
+    python_venv = "bin/python" if not IS_WINDOWS else "Scripts/python.exe"
+    openpilot_ok = (OPENPILOT_DIR / ".venv" / python_venv).exists()
+    wsl_available = _detect_wsl() if IS_WINDOWS else False
+
+    render_types: dict[str, dict[str, Any]] = {}
+    for rt in sorted(VALID_RENDER_TYPES):
+        is_openpilot_type = rt in OPENPILOT_RENDER_TYPES
+        if is_openpilot_type:
+            if IS_WINDOWS and not openpilot_ok:
+                if wsl_available:
+                    render_types[rt] = {"available": True, "method": "wsl", "note": "Renders via WSL"}
+                else:
+                    render_types[rt] = {"available": False, "reason": "requires_wsl",
+                                        "note": "Requires Windows Subsystem for Linux"}
+            else:
+                render_types[rt] = {"available": True, "method": "native"}
+        else:
+            render_types[rt] = {"available": True, "method": "native"}
+
+    return {
+        "platform": PLATFORM.lower(),
+        "gpu": gpu,
+        "gpu_type": "videotoolbox" if IS_MACOS else ("nvidia" if gpu and not IS_MACOS else "none"),
+        "wsl": wsl_available if IS_WINDOWS else None,
+        "openpilot_installed": openpilot_ok,
+        "render_types": render_types,
     }
 
 
@@ -546,6 +665,14 @@ async def create_clip(body: ClipRequestBody) -> dict[str, Any]:
     if body.download_source == "ssh" and not body.device_ip.strip():
         raise HTTPException(status_code=422, detail="Device IP address is required for SSH downloads.")
 
+    # On Windows, UI render types require WSL
+    if IS_WINDOWS and body.render_type in OPENPILOT_RENDER_TYPES and not _detect_wsl():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Render type '{body.render_type}' requires Windows Subsystem for Linux (WSL). "
+                   "Install WSL with: wsl --install",
+        )
+
     job_id = uuid.uuid4().hex[:12]
     job = Job(job_id=job_id)
     JOBS[job_id] = job
@@ -631,8 +758,7 @@ async def open_clip_file(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.state != JobState.done or not job.output_path:
         raise HTTPException(status_code=400, detail="Clip not ready")
-    import subprocess
-    subprocess.Popen(["xdg-open", job.output_path])
+    _open_path(job.output_path)
     return {"status": "ok"}
 
 
@@ -644,6 +770,5 @@ async def open_clip_folder(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.state != JobState.done or not job.output_path:
         raise HTTPException(status_code=400, detail="Clip not ready")
-    import subprocess
-    subprocess.Popen(["xdg-open", str(Path(job.output_path).parent)])
+    _open_path(str(Path(job.output_path).parent))
     return {"status": "ok"}

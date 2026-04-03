@@ -94,8 +94,18 @@ OPENPILOT_ROOT="${OPENPILOT_ROOT:-${CLIPPER_HOME}/openpilot}"
 OPENPILOT_REPO_URL="${OPENPILOT_REPO_URL:-https://github.com/commaai/openpilot.git}"
 OPENPILOT_BRANCH="${OPENPILOT_BRANCH:-master}"
 OPENPILOT_CLONE_DEPTH="${OPENPILOT_CLONE_DEPTH:-1}"
-SCONS_JOBS="${SCONS_JOBS:-$(nproc 2>/dev/null || echo 8)}"
-export DEBIAN_FRONTEND=noninteractive
+SCONS_JOBS="${SCONS_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8)}"
+
+# Platform detection
+OS_TYPE="$(uname -s)"
+IS_LINUX=false
+IS_MACOS=false
+if [[ "${OS_TYPE}" == "Linux" ]]; then
+  IS_LINUX=true
+  export DEBIAN_FRONTEND=noninteractive
+elif [[ "${OS_TYPE}" == "Darwin" ]]; then
+  IS_MACOS=true
+fi
 
 # Packages needed for the rendering pipeline.
 # Sourced from the original bootstrap_image_env.sh APT_PACKAGES list.
@@ -141,6 +151,16 @@ APT_PACKAGES=(
 #   - faketime                        (likely unused by clipper, verify later)
 #   - sudo                            (already on host)
 
+# macOS packages (installed via Homebrew)
+BREW_PACKAGES=(
+  cmake
+  jq
+  ffmpeg
+  capnp
+  git-lfs
+  zstd
+)
+
 # ---------------------------------------------------------------------------
 # Section 2: Logging & utility helpers
 # ---------------------------------------------------------------------------
@@ -179,29 +199,46 @@ die() {
 preflight_checks() {
   log_step "Running preflight checks"
 
-  # Must be Linux
-  [[ "$(uname -s)" == "Linux" ]] || die "This script only supports Linux."
-
-  # Must be apt-based (Phase 0 targets Ubuntu/Mint/Pop only)
-  command -v apt-get >/dev/null 2>&1 || die "apt-get not found. This script requires an apt-based distro (Ubuntu, Mint, Pop!_OS)."
-
-  # NVIDIA driver check — warn but don't block (GPU only needed at render time)
-  if ! command -v nvidia-smi >/dev/null 2>&1; then
-    log_warn "nvidia-smi not found. NVIDIA drivers are required for GPU-accelerated rendering."
-  elif ! nvidia-smi >/dev/null 2>&1; then
-    log_warn "nvidia-smi failed (driver/library mismatch or no GPU). Rendering will need a working GPU later."
-  else
-    log_ok "NVIDIA driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -1)"
-    log_ok "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+  # Must be Linux or macOS
+  if [[ "${IS_LINUX}" != "true" ]] && [[ "${IS_MACOS}" != "true" ]]; then
+    die "This script supports Linux and macOS only. For Windows, use install_windows.py."
   fi
 
-  # Check for CUDA toolkit (nvcc). Warn if missing but don't block —
-  # openpilot's setup_dependencies.sh may handle this, and the scons build
-  # doesn't compile CUDA kernels (GOTCHA: scons builds Cython .so files, not CUDA).
-  if command -v nvcc >/dev/null 2>&1; then
-    log_ok "CUDA toolkit: $(nvcc --version | grep 'release' | sed 's/.*release //' | sed 's/,.*//')"
-  else
-    log_warn "nvcc not found. CUDA toolkit may be needed — openpilot's setup may install it."
+  # Package manager check
+  if [[ "${IS_LINUX}" == "true" ]]; then
+    command -v apt-get >/dev/null 2>&1 || die "apt-get not found. This script requires an apt-based distro (Ubuntu, Mint, Pop!_OS)."
+  elif [[ "${IS_MACOS}" == "true" ]]; then
+    if ! command -v brew >/dev/null 2>&1; then
+      die "Homebrew not found. Install from https://brew.sh"
+    fi
+    log_ok "Homebrew: $(brew --version | head -1)"
+    # Check for Xcode command line tools
+    if ! xcode-select -p >/dev/null 2>&1; then
+      log_warn "Xcode command line tools not found. Installing..."
+      xcode-select --install 2>/dev/null || log_warn "Run 'xcode-select --install' manually if prompted."
+    else
+      log_ok "Xcode CLT: $(xcode-select -p)"
+    fi
+  fi
+
+  # GPU check — platform-specific
+  if [[ "${IS_MACOS}" == "true" ]]; then
+    log_ok "GPU: VideoToolbox hardware acceleration (macOS)"
+  elif [[ "${IS_LINUX}" == "true" ]]; then
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+      log_warn "nvidia-smi not found. NVIDIA drivers are required for GPU-accelerated rendering."
+    elif ! nvidia-smi >/dev/null 2>&1; then
+      log_warn "nvidia-smi failed (driver/library mismatch or no GPU). Rendering will need a working GPU later."
+    else
+      log_ok "NVIDIA driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -1)"
+      log_ok "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+    fi
+
+    if command -v nvcc >/dev/null 2>&1; then
+      log_ok "CUDA toolkit: $(nvcc --version | grep 'release' | sed 's/.*release //' | sed 's/,.*//')"
+    else
+      log_warn "nvcc not found. CUDA toolkit may be needed — openpilot's setup may install it."
+    fi
   fi
 
   # Python 3.12+
@@ -245,9 +282,14 @@ install_system_packages() {
     return
   fi
 
-  log_step "Installing system packages"
-  sudo apt-get update -y
-  sudo apt-get install -y "${APT_PACKAGES[@]}"
+  if [[ "${IS_MACOS}" == "true" ]]; then
+    log_step "Installing system packages (Homebrew)"
+    brew install "${BREW_PACKAGES[@]}" || true  # brew install is idempotent, ignore "already installed" errors
+  else
+    log_step "Installing system packages (apt)"
+    sudo apt-get update -y
+    sudo apt-get install -y "${APT_PACKAGES[@]}"
+  fi
 
   # Configure git-lfs (needs to run once after install)
   git lfs install
@@ -478,6 +520,15 @@ assert \"'-lEGL'\" in build
 install_patched_pyray() {
   if [[ "${SKIP_PYRAY:-0}" == "1" ]]; then
     log_step "Skipping patched pyray build (SKIP_PYRAY=1)"
+    return
+  fi
+
+  # macOS: the EGL pbuffer patches are Linux-specific. macOS uses native GL
+  # contexts for headless rendering (CGL/Metal). openpilot's own pyray may
+  # work unpatched on macOS. Skip this step and document as needing validation.
+  if [[ "${IS_MACOS}" == "true" ]]; then
+    log_step "Skipping patched pyray on macOS (EGL patches are Linux-specific)"
+    log_warn "macOS headless rendering needs validation — openpilot's stock pyray may work via CGL."
     return
   fi
 
@@ -883,7 +934,7 @@ validate_install() {
   log_step "Validating installation"
   local errors=0
 
-  # Check openpilot venv exists (GOTCHA #10: clip.py checks for .venv/bin/python)
+  # Check openpilot venv exists
   if [[ -x "${OPENPILOT_ROOT}/.venv/bin/python" ]]; then
     log_ok "openpilot venv: ${OPENPILOT_ROOT}/.venv/bin/python"
   else
@@ -891,27 +942,29 @@ validate_install() {
     ((errors++))
   fi
 
-  # Check scons build artifacts
-  local scons_targets=(
-    "msgq_repo/msgq/ipc_pyx.so"
-    "msgq_repo/msgq/visionipc/visionipc_pyx.so"
-    "common/params_pyx.so"
-  )
-  for target in "${scons_targets[@]}"; do
-    if [[ -f "${OPENPILOT_ROOT}/${target}" ]]; then
-      log_ok "scons target: ${target}"
+  # Check scons build artifacts (Linux only — macOS may use different paths)
+  if [[ "${IS_LINUX}" == "true" ]]; then
+    local scons_targets=(
+      "msgq_repo/msgq/ipc_pyx.so"
+      "msgq_repo/msgq/visionipc/visionipc_pyx.so"
+      "common/params_pyx.so"
+    )
+    for target in "${scons_targets[@]}"; do
+      if [[ -f "${OPENPILOT_ROOT}/${target}" ]]; then
+        log_ok "scons target: ${target}"
+      else
+        log_err "scons target missing: ${target}"
+        ((errors++))
+      fi
+    done
+
+    # Check patched pyray (Linux only)
+    if "${OPENPILOT_ROOT}/.venv/bin/python" -c "import raylib; print(raylib.__file__)" 2>/dev/null; then
+      log_ok "patched pyray importable in openpilot venv"
     else
-      log_err "scons target missing: ${target}"
+      log_err "patched pyray not importable"
       ((errors++))
     fi
-  done
-
-  # Check patched pyray
-  if "${OPENPILOT_ROOT}/.venv/bin/python" -c "import raylib; print(raylib.__file__)" 2>/dev/null; then
-    log_ok "patched pyray importable in openpilot venv"
-  else
-    log_err "patched pyray not importable"
-    ((errors++))
   fi
 
   # Check font atlases (look for generated .png files)

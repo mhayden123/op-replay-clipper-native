@@ -279,6 +279,42 @@
   }
   .pill:hover { border-color: var(--border-hover); color: var(--text); }
   .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pill.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    position: relative;
+  }
+  .pill.disabled:hover { border-color: var(--border); color: var(--text-muted); }
+  .pill.disabled::after {
+    content: "\1F512";
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
+  /* WSL dialog */
+  .wsl-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  .wsl-overlay.visible { display: flex; }
+  .wsl-dialog {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    max-width: 420px;
+    text-align: center;
+  }
+  .wsl-dialog h3 { margin-bottom: 12px; font-size: 16px; }
+  .wsl-dialog p { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; }
+  .wsl-dialog code { background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  .wsl-dialog .actions { display: flex; gap: 10px; justify-content: center; }
+  .wsl-dialog .actions button { padding: 8px 18px; border-radius: 6px; font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; }
 
   .render-desc {
     font-size: 11px;
@@ -712,7 +748,9 @@
   let eventSource = null;
   let sshTestTimer = null;
 
-  // ===== Health check =====
+  // ===== Health check + platform detection =====
+  var _platformInfo = null;
+
   async function checkHealth() {
     try {
       const res = await fetch("/api/health");
@@ -720,17 +758,52 @@
       var banner = document.getElementById("statusBanner");
       var text = document.getElementById("statusText");
       if (!h.clip_py || !h.openpilot) {
-        banner.className = "status-banner error visible";
-        text.textContent = "Environment not set up \u2014 run ./install.sh";
+        if (h.platform === "windows") {
+          // Windows doesn't need openpilot for non-UI renders
+          if (h.clip_py) {
+            banner.className = "status-banner ok visible";
+            text.textContent = "Windows mode \u2014 " + (h.gpu ? "GPU: " + h.gpu_type : "CPU only");
+          } else {
+            banner.className = "status-banner error visible";
+            text.textContent = "Environment not set up \u2014 run install_windows.py";
+          }
+        } else {
+          banner.className = "status-banner error visible";
+          text.textContent = "Environment not set up \u2014 run ./install.sh";
+        }
       } else if (h.gpu) {
+        var gpuLabel = h.gpu_type === "videotoolbox" ? "VideoToolbox" : "NVIDIA";
         banner.className = "status-banner ok visible";
-        text.textContent = "Native mode \u2014 GPU: detected";
+        text.textContent = "Native mode \u2014 GPU: " + gpuLabel;
       } else {
         banner.className = "status-banner warn visible";
         text.textContent = "Native mode \u2014 CPU only (no GPU detected)";
       }
     } catch {}
+
+    // Check platform capabilities for render type availability
+    try {
+      const res = await fetch("/api/platform");
+      _platformInfo = await res.json();
+      applyPlatformRestrictions();
+    } catch {}
   }
+
+  function applyPlatformRestrictions() {
+    if (!_platformInfo || !_platformInfo.render_types) return;
+    var pills = document.querySelectorAll("#renderTypePills .pill");
+    pills.forEach(function(pill) {
+      var rt = pill.dataset.value;
+      var info = _platformInfo.render_types[rt];
+      if (info && !info.available) {
+        pill.classList.add("disabled");
+        pill.title = info.note || "Not available on this platform";
+      } else if (info && info.method === "wsl") {
+        pill.title = (pill.title || "") + " (via WSL)";
+      }
+    });
+  }
+
   window.addEventListener("DOMContentLoaded", checkHealth);
 
   // ===== SSH device scanning & testing =====
@@ -848,6 +921,15 @@
   document.getElementById("renderTypePills").addEventListener("click", (e) => {
     const pill = e.target.closest(".pill");
     if (!pill) return;
+    // Block clicks on unavailable render types
+    if (pill.classList.contains("disabled")) {
+      var rt = pill.dataset.value;
+      var info = _platformInfo && _platformInfo.render_types && _platformInfo.render_types[rt];
+      if (info && info.reason === "requires_wsl") {
+        showWslDialog();
+      }
+      return;
+    }
     document.querySelectorAll("#renderTypePills .pill").forEach(p => p.classList.remove("active"));
     pill.classList.add("active");
     currentRenderType = pill.dataset.value;
@@ -1182,7 +1264,34 @@
     back.className = "btn-primary btn-error";
     document.getElementById("btnBackText").textContent = "Return and Fix Settings";
   }
+  // ===== WSL dialog =====
+  function showWslDialog() {
+    document.getElementById("wslOverlay").classList.add("visible");
+  }
+  function hideWslDialog() {
+    document.getElementById("wslOverlay").classList.remove("visible");
+  }
 </script>
+
+<!-- WSL Required Dialog (shown when clicking disabled UI render types on Windows) -->
+<div class="wsl-overlay" id="wslOverlay" onclick="if(event.target===this)hideWslDialog()">
+  <div class="wsl-dialog">
+    <h3>Windows Subsystem for Linux Required</h3>
+    <p>
+      UI render types (<strong>ui</strong>, <strong>ui-alt</strong>, <strong>driver-debug</strong>)
+      need openpilot's rendering engine, which only runs on Linux.<br><br>
+      Install WSL and set up the clipper inside it:
+    </p>
+    <p><code>wsl --install</code></p>
+    <p style="font-size:12px;color:var(--text-muted);opacity:0.7;">
+      Then inside WSL: clone this repo and run <code>./install.sh</code>
+    </p>
+    <div class="actions">
+      <button onclick="hideWslDialog()" style="background:rgba(255,255,255,0.08);border:1px solid var(--border);color:var(--text);">Close</button>
+      <button onclick="window.open('https://learn.microsoft.com/en-us/windows/wsl/install','_blank');hideWslDialog()" style="background:var(--accent);border:none;color:#fff;">Learn More</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
