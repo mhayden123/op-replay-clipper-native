@@ -676,15 +676,15 @@
       <div id="clipSummary" style="display:none;margin-bottom:14px;">
         <div style="display:flex;gap:1px;border-radius:8px;overflow:hidden;">
           <div style="flex:1;padding:14px 16px;background:rgba(255,255,255,0.03);text-align:center;">
-            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summarySize">—</div>
+            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summarySize">--</div>
             <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-top:4px;">File Size</div>
           </div>
           <div style="flex:1;padding:14px 16px;background:rgba(255,255,255,0.03);text-align:center;">
-            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summaryDuration">—</div>
+            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summaryDuration">--</div>
             <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-top:4px;">Duration</div>
           </div>
           <div style="flex:1;padding:14px 16px;background:rgba(255,255,255,0.03);text-align:center;">
-            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summaryBitrate">—</div>
+            <div style="font-size:20px;font-weight:700;color:var(--text);line-height:1.2;" id="summaryBitrate">--</div>
             <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-top:4px;">Bitrate</div>
           </div>
         </div>
@@ -974,7 +974,7 @@
         const mins = Math.floor(data.duration_seconds / 60);
         const secs = data.duration_seconds % 60;
         const dur = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-        box.textContent = `Route duration: ${dur} — Estimated output: ~${data.estimated_mb} MB`;
+        box.textContent = `Route duration: ${dur} - Estimated output: ~${data.estimated_mb} MB`;
       })
       .catch(() => { box.style.display = "none"; });
   }
@@ -1161,6 +1161,43 @@
     return stats;
   }
 
+  function populateSummary(jobId) {
+    // Source 1: SSE progress events
+    var lastProgress = window._lastProgress || {};
+    // Source 2: parse ffmpeg output from log lines
+    var logStats = parseStatsFromLogs();
+
+    var sizeKb = lastProgress.size_kb || logStats.size_kb;
+    var timeSec = lastProgress.time_seconds || logStats.time_seconds;
+    var bitrateKbps = lastProgress.bitrate_kbps || logStats.bitrate_kbps;
+
+    if (sizeKb) {
+      document.getElementById("summarySize").textContent = (sizeKb / 1024).toFixed(1) + " MB";
+    }
+    if (timeSec) {
+      var t = Math.round(timeSec);
+      var m = Math.floor(t / 60);
+      var s = t % 60;
+      document.getElementById("summaryDuration").textContent = m > 0 ? m + "m " + s + "s" : s + "s";
+    }
+    if (bitrateKbps) {
+      document.getElementById("summaryBitrate").textContent = (bitrateKbps / 1000).toFixed(1) + " Mbps";
+    }
+
+    // Source 3: if we still have no size, get it from the download endpoint headers
+    if (!sizeKb) {
+      fetch("/api/clip/" + jobId + "/download", { method: "HEAD" })
+        .then(function(r) {
+          var cl = r.headers.get("content-length");
+          if (cl) {
+            var mb = (parseInt(cl) / 1048576).toFixed(1);
+            document.getElementById("summarySize").textContent = mb + " MB";
+          }
+        })
+        .catch(function() {});
+    }
+  }
+
   function parseFFmpegTime(t) {
     var parts = t.split(":");
     if (parts.length === 3) return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
@@ -1178,27 +1215,9 @@
     area.style.display = "block";
     document.getElementById("successBanner").style.display = "flex";
 
-    // Populate summary card — prefer progress events, fall back to log parsing
+    // Populate summary card - try multiple sources for stats
     const summary = document.getElementById("clipSummary");
-    const lastProgress = window._lastProgress || {};
-    const logStats = parseStatsFromLogs();
-    const sizeKb = lastProgress.size_kb || logStats.size_kb;
-    const timeSec = lastProgress.time_seconds || logStats.time_seconds;
-    const bitrateKbps = lastProgress.bitrate_kbps || logStats.bitrate_kbps;
-
-    if (sizeKb != null) {
-      const sizeMb = (sizeKb / 1024).toFixed(1);
-      document.getElementById("summarySize").textContent = sizeMb + " MB";
-    }
-    if (timeSec != null) {
-      const t = Math.round(timeSec);
-      const m = Math.floor(t / 60);
-      const s = t % 60;
-      document.getElementById("summaryDuration").textContent = m > 0 ? m + "m " + s + "s" : s + "s";
-    }
-    if (bitrateKbps != null) {
-      document.getElementById("summaryBitrate").textContent = (bitrateKbps / 1000).toFixed(1) + " Mbps";
-    }
+    populateSummary(jobId);
     summary.style.display = "block";
 
     window._clipJobId = jobId;
