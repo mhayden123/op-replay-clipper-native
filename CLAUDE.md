@@ -35,7 +35,7 @@ UI rendering depends on openpilot's native `replay` tool (C++ binary).
 **What it does:**
 - Replays logged driving data by publishing cereal messages
 - Feeds data into openpilot's UI process which renders the visual overlay
-- The clipper captures the rendered UI output via screen recording (Xvfb + ffmpeg x11grab)
+- GlideKit captures the rendered UI output via screen recording (Xvfb + ffmpeg x11grab)
 
 **Key flags:**
 - `--demo` -- built-in demo route
@@ -140,7 +140,7 @@ import openpilot modules and fail with a clear message if unavailable.
 | `GET` | `/api/platform` | Available render types per platform |
 | `GET` | `/api/wsl/status` | WSL installation status (Windows) |
 | `POST` | `/api/wsl/install` | Install WSL (Windows, triggers UAC) |
-| `POST` | `/api/wsl/setup-clipper` | SSE-streamed clipper install in WSL |
+| `POST` | `/api/wsl/setup-glidekit` | SSE-streamed GlideKit install in WSL |
 | `GET` | `/` | Serve web UI |
 
 ### ClipRequestBody Schema
@@ -190,7 +190,7 @@ ssh_port: int = 22
    rendering. The EGL pbuffer patches enable `OPENPILOT_UI_NULL_EGL=1`.
 
 3. **Two separate venvs** -- openpilot's venv (`~/.glidekit/openpilot/.venv/`)
-   is separate from the clipper's venv (`./venv/`). The pyray wheel, scons .so files,
+   is separate from GlideKit's venv (`./venv/`). The pyray wheel, scons .so files,
    and fonts live in openpilot's venv. Don't mix them.
 
 4. **xserver-xorg-video-nvidia-525 must NOT be installed** -- it provides the X11 NVIDIA

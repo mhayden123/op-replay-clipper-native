@@ -1536,7 +1536,7 @@
     var body = document.getElementById("wslBody");
     var steps = [
       { id: "wsl", label: "Install WSL + Ubuntu", done: s.wsl_installed && s.distro_name },
-      { id: "clipper", label: "Install clipper in WSL", done: s.clipper_installed },
+      { id: "glidekit", label: "Install GlideKit in WSL", done: s.glidekit_installed },
       { id: "openpilot", label: "Build openpilot (UI renderer)", done: s.openpilot_installed }
     ];
 
@@ -1576,12 +1576,12 @@
         '</div>';
     } else if (currentStep === 1 || currentStep === 2) {
       actionHtml =
-        '<p>WSL is installed. Now set up the clipper inside it.</p>' +
+        '<p>WSL is installed. Now set up GlideKit inside it.</p>' +
         stepsHtml +
         '<div id="wslProgressLog" class="wsl-progress-log"></div>' +
         '<div class="actions">' +
         '  <button class="btn-primary btn-ghost" onclick="hideWslDialog()">Cancel</button>' +
-        '  <button class="btn-primary" id="wslActionBtn" onclick="setupClipperInWsl()">Set Up Clipper (~20 min)</button>' +
+        '  <button class="btn-primary" id="wslActionBtn" onclick="setupGlideKitInWsl()">Set Up GlideKit (~20 min)</button>' +
         '</div>';
     }
 
@@ -1615,7 +1615,7 @@
       });
   }
 
-  function setupClipperInWsl() {
+  function setupGlideKitInWsl() {
     var btn = document.getElementById("wslActionBtn");
     btn.disabled = true;
     btn.textContent = "Setting up...";
@@ -1623,7 +1623,7 @@
     logEl.style.display = "block";
     logEl.textContent = "";
 
-    var es = new EventSource("/api/wsl/setup-clipper");
+    var es = new EventSource("/api/wsl/setup-glidekit");
     es.onmessage = function(e) {
       logEl.textContent += e.data + "\n";
       logEl.scrollTop = logEl.scrollHeight;

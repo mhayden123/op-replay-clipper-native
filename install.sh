@@ -25,8 +25,8 @@ Options:
   --uninstall       Remove everything under ~/.glidekit/ (with confirmation)
 
 Environment variables (all optional):
-  CLIPPER_HOME       Base directory for all clipper data     (default: ~/.glidekit)
-  OPENPILOT_ROOT     Where to clone openpilot                (default: $CLIPPER_HOME/openpilot)
+  GLIDEKIT_HOME      Base directory for all GlideKit data    (default: ~/.glidekit)
+  OPENPILOT_ROOT     Where to clone openpilot                (default: $GLIDEKIT_HOME/openpilot)
   OPENPILOT_REPO_URL openpilot git URL                       (default: commaai/openpilot)
   OPENPILOT_BRANCH   openpilot branch to clone               (default: master)
   SCONS_JOBS         Parallel build jobs                     (default: $(nproc))
@@ -42,12 +42,12 @@ SKIP_* flags force a step to be skipped even if detection would run it.
 Examples:
   ./install.sh                     # Full install (skips completed steps)
   SKIP_APT=1 ./install.sh          # Skip apt (e.g. packages already installed)
-  ./install.sh --uninstall          # Remove clipper data
+  ./install.sh --uninstall          # Remove GlideKit data
 USAGE
 }
 
 do_uninstall() {
-  local home="${CLIPPER_HOME:-${HOME}/.glidekit}"
+  local home="${GLIDEKIT_HOME:-${HOME}/.glidekit}"
   if [[ ! -d "${home}" ]]; then
     echo "Nothing to uninstall — ${home} does not exist."
     exit 0
@@ -57,7 +57,7 @@ do_uninstall() {
   echo "  ${home}"
   echo ""
   echo "This includes the openpilot checkout, built dependencies, rendered clips,"
-  echo "and downloaded route data. The clipper source code (this repo) is NOT affected."
+  echo "and downloaded route data. The GlideKit source code (this repo) is NOT affected."
   echo ""
   du -sh "${home}" 2>/dev/null | awk '{print "  Total size: " $1}'
   echo ""
@@ -89,8 +89,8 @@ fi
 # Section 1: Configuration & defaults
 # ---------------------------------------------------------------------------
 
-CLIPPER_HOME="${CLIPPER_HOME:-${HOME}/.glidekit}"
-OPENPILOT_ROOT="${OPENPILOT_ROOT:-${CLIPPER_HOME}/openpilot}"
+GLIDEKIT_HOME="${GLIDEKIT_HOME:-${HOME}/.glidekit}"
+OPENPILOT_ROOT="${OPENPILOT_ROOT:-${GLIDEKIT_HOME}/openpilot}"
 OPENPILOT_REPO_URL="${OPENPILOT_REPO_URL:-https://github.com/commaai/openpilot.git}"
 OPENPILOT_BRANCH="${OPENPILOT_BRANCH:-master}"
 OPENPILOT_CLONE_DEPTH="${OPENPILOT_CLONE_DEPTH:-1}"
@@ -148,7 +148,7 @@ APT_PACKAGES=(
 
 # Packages deliberately excluded from the Docker list:
 #   - xserver-xorg-video-nvidia-525  (Docker-specific, see GOTCHA #6)
-#   - faketime                        (likely unused by clipper, verify later)
+#   - faketime                        (likely unused by GlideKit, verify later)
 #   - sudo                            (already on host)
 
 # macOS packages (installed via Homebrew)
@@ -262,9 +262,9 @@ preflight_checks() {
 
   # Disk space — openpilot clone + build needs ~10-15 GB
   local available_gb
-  available_gb=$(df --output=avail "${CLIPPER_HOME%/*}" 2>/dev/null | tail -1 | awk '{printf "%.0f", $1/1048576}')
+  available_gb=$(df --output=avail "${GLIDEKIT_HOME%/*}" 2>/dev/null | tail -1 | awk '{printf "%.0f", $1/1048576}')
   if [[ -n "${available_gb}" ]] && (( available_gb < 15 )); then
-    log_warn "Only ${available_gb} GB free at ${CLIPPER_HOME%/*}. Recommend at least 15 GB."
+    log_warn "Only ${available_gb} GB free at ${GLIDEKIT_HOME%/*}. Recommend at least 15 GB."
   else
     log_ok "Disk space: ${available_gb} GB available"
   fi
@@ -380,7 +380,7 @@ clone_openpilot() {
 # scons build or font generation. Optimize later once the pipeline is proven.
 #
 # GOTCHA #9: This creates openpilot's OWN Python venv at $OPENPILOT_ROOT/.venv.
-# This is SEPARATE from the clipper's venv. The patched pyray, scons-built
+# This is SEPARATE from GlideKit's venv. The patched pyray, scons-built
 # .so files, and fonts all live inside openpilot's venv. Do not mix them up.
 
 install_openpilot_dependencies() {
@@ -442,7 +442,7 @@ fix_vendored_tool_permissions() {
 #
 # GOTCHA #3: This is a TARGETED build of exactly 5 Cython .so files.
 # Do NOT run scons without specifying targets — that builds ALL of openpilot
-# and takes forever. These 5 files are all the clipper needs:
+# and takes forever. These 5 files are all GlideKit needs:
 #   - msgq IPC and visionipc (inter-process communication)
 #   - params (openpilot parameter system)
 #   - MPC solvers (longitudinal and lateral)
@@ -496,7 +496,7 @@ build_openpilot_clip_dependencies() {
 #   3. Build raylib as a static library (libraylib.a)
 #   4. Clone comma's fork of raylib-python-cffi
 #   5. Patch its build.py to statically link libraylib.a and add -lEGL
-#   6. Build a wheel and install it into OPENPILOT's venv (not the clipper's!)
+#   6. Build a wheel and install it into OPENPILOT's venv (not GlideKit's!)
 #   7. Verify the installed pyray has the patches
 #
 # The standalone build_linux_pyray_null_egl.py from the source repo is used
@@ -902,28 +902,28 @@ record_openpilot_commit() {
 # Section 13: Create directory structure & write config
 # ---------------------------------------------------------------------------
 
-setup_clipper_directories() {
-  log_step "Setting up clipper directory structure"
+setup_glidekit_directories() {
+  log_step "Setting up GlideKit directory structure"
 
-  mkdir -p "${CLIPPER_HOME}/output"
-  mkdir -p "${CLIPPER_HOME}/data"
+  mkdir -p "${GLIDEKIT_HOME}/output"
+  mkdir -p "${GLIDEKIT_HOME}/data"
 
   # Write a small config file that clip.py and server.py can reference
-  cat > "${CLIPPER_HOME}/config.env" <<EOF
+  cat > "${GLIDEKIT_HOME}/config.env" <<EOF
 # GlideKit — Native Configuration
 # Generated by install.sh on $(date -Iseconds)
-CLIPPER_HOME=${CLIPPER_HOME}
+GLIDEKIT_HOME=${GLIDEKIT_HOME}
 OPENPILOT_ROOT=${OPENPILOT_ROOT}
-CLIPPER_OUTPUT_DIR=${CLIPPER_HOME}/output
-CLIPPER_DATA_DIR=${CLIPPER_HOME}/data
+GLIDEKIT_OUTPUT_DIR=${GLIDEKIT_HOME}/output
+GLIDEKIT_DATA_DIR=${GLIDEKIT_HOME}/data
 OPENPILOT_UI_NULL_EGL=1
 EOF
 
   log_ok "Directories created:"
-  echo "  Base:    ${CLIPPER_HOME}"
-  echo "  Output:  ${CLIPPER_HOME}/output"
-  echo "  Data:    ${CLIPPER_HOME}/data"
-  echo "  Config:  ${CLIPPER_HOME}/config.env"
+  echo "  Base:    ${GLIDEKIT_HOME}"
+  echo "  Output:  ${GLIDEKIT_HOME}/output"
+  echo "  Data:    ${GLIDEKIT_HOME}/data"
+  echo "  Config:  ${GLIDEKIT_HOME}/config.env"
 }
 
 # ---------------------------------------------------------------------------
@@ -1002,7 +1002,7 @@ print_summary() {
   printf '%b  Installation complete!%b\n' "${GREEN}" "${NC}"
   printf '%b%s%b\n' "${GREEN}" "============================================" "${NC}"
   printf '\n'
-  echo "Clipper home:     ${CLIPPER_HOME}"
+  echo "GlideKit home:    ${GLIDEKIT_HOME}"
   echo "openpilot root:   ${OPENPILOT_ROOT}"
   echo "openpilot commit: $(cat "${OPENPILOT_ROOT}/COMMIT" 2>/dev/null || echo 'unknown')"
   printf '\n'
@@ -1028,13 +1028,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 main() {
   echo "GlideKit — Native Install"
   echo "=================================="
-  echo "Target: ${CLIPPER_HOME}"
+  echo "Target: ${GLIDEKIT_HOME}"
   printf '\n'
 
   preflight_checks
   install_system_packages
   ensure_uv
-  setup_clipper_directories
+  setup_glidekit_directories
   clone_openpilot
   install_openpilot_dependencies
   fix_vendored_tool_permissions

@@ -15,7 +15,7 @@ if [[ ! -f "clip.py" ]]; then
   exit 1
 fi
 
-# Install clipper Python deps if .venv is missing
+# Install GlideKit Python deps if .venv is missing
 if [[ ! -d ".venv" ]]; then
   echo "First run — installing Python dependencies..."
   uv sync

@@ -38,7 +38,7 @@ Installs everything: system packages, openpilot, GPU dependencies. Idempotent â€
 
 ### Windows
 
-Download the desktop app from [GlideKit Desktop Releases](https://github.com/mhayden123/glidekit-desktop/releases). It installs Python, Git, FFmpeg, and the clipper automatically. Double-click and go.
+Download the desktop app from [GlideKit Desktop Releases](https://github.com/mhayden123/glidekit-desktop/releases). It installs Python, Git, FFmpeg, and GlideKit automatically. Double-click and go.
 
 For camera-only renders (forward, wide, driver, 360) everything works natively. For UI renders, the app walks you through a one-time WSL setup.
 

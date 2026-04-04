@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 
-CLIPPER_HOME = Path(os.environ.get("CLIPPER_HOME", Path.home() / ".glidekit"))
+GLIDEKIT_HOME = Path(os.environ.get("GLIDEKIT_HOME", Path.home() / ".glidekit"))
 FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 
 
@@ -81,7 +81,7 @@ def install_ffmpeg() -> None:
         log_ok(f"FFmpeg already available: {first_line}")
         return
 
-    ffmpeg_dir = CLIPPER_HOME / "ffmpeg"
+    ffmpeg_dir = GLIDEKIT_HOME / "ffmpeg"
     ffmpeg_exe = ffmpeg_dir / "ffmpeg.exe"
     if ffmpeg_exe.exists():
         log_ok(f"FFmpeg already downloaded: {ffmpeg_exe}")
@@ -113,19 +113,19 @@ def install_ffmpeg() -> None:
 
 
 def setup_directories() -> None:
-    """Create the clipper directory structure."""
+    """Create the GlideKit directory structure."""
     log_step("Setting up directories")
     for d in ("output", "data"):
-        (CLIPPER_HOME / d).mkdir(parents=True, exist_ok=True)
+        (GLIDEKIT_HOME / d).mkdir(parents=True, exist_ok=True)
 
-    config = CLIPPER_HOME / "config.env"
+    config = GLIDEKIT_HOME / "config.env"
     config.write_text(
         f"# GlideKit — Windows Configuration\n"
-        f"CLIPPER_HOME={CLIPPER_HOME}\n"
-        f"CLIPPER_OUTPUT_DIR={CLIPPER_HOME / 'output'}\n"
-        f"CLIPPER_DATA_DIR={CLIPPER_HOME / 'data'}\n"
+        f"GLIDEKIT_HOME={GLIDEKIT_HOME}\n"
+        f"GLIDEKIT_OUTPUT_DIR={GLIDEKIT_HOME / 'output'}\n"
+        f"GLIDEKIT_DATA_DIR={GLIDEKIT_HOME / 'data'}\n"
     )
-    log_ok(f"Directories: {CLIPPER_HOME}")
+    log_ok(f"Directories: {GLIDEKIT_HOME}")
 
 
 def check_gpu() -> None:
@@ -174,9 +174,9 @@ def check_wsl() -> None:
     log_warn("Non-UI render types (forward, wide, driver, 360, etc.) work without WSL.")
 
 
-def install_clipper_deps() -> None:
-    """Run uv sync for the clipper's Python dependencies."""
-    log_step("Installing clipper Python dependencies")
+def install_glidekit_deps() -> None:
+    """Run uv sync for GlideKit's Python dependencies."""
+    log_step("Installing GlideKit Python dependencies")
     project_root = Path(__file__).resolve().parent
     if not (project_root / "pyproject.toml").exists():
         log_err(f"pyproject.toml not found in {project_root}")
@@ -187,14 +187,14 @@ def install_clipper_deps() -> None:
 
 
 def do_uninstall() -> None:
-    """Remove the clipper data directory."""
-    if not CLIPPER_HOME.exists():
-        print(f"Nothing to uninstall — {CLIPPER_HOME} does not exist.")
+    """Remove the GlideKit data directory."""
+    if not GLIDEKIT_HOME.exists():
+        print(f"Nothing to uninstall — {GLIDEKIT_HOME} does not exist.")
         return
 
-    size = sum(f.stat().st_size for f in CLIPPER_HOME.rglob("*") if f.is_file()) / (1024 * 1024)
+    size = sum(f.stat().st_size for f in GLIDEKIT_HOME.rglob("*") if f.is_file()) / (1024 * 1024)
     print(f"This will permanently delete:")
-    print(f"  {CLIPPER_HOME}")
+    print(f"  {GLIDEKIT_HOME}")
     print(f"  Total size: {size:.0f} MB")
     print()
     confirm = input("Type 'yes' to confirm: ")
@@ -202,13 +202,13 @@ def do_uninstall() -> None:
         print("Cancelled.")
         return
 
-    shutil.rmtree(CLIPPER_HOME)
-    print(f"Removed {CLIPPER_HOME}")
+    shutil.rmtree(GLIDEKIT_HOME)
+    print(f"Removed {GLIDEKIT_HOME}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="GlideKit — Windows Installer")
-    parser.add_argument("--uninstall", action="store_true", help="Remove clipper data")
+    parser.add_argument("--uninstall", action="store_true", help="Remove GlideKit data")
     args = parser.parse_args()
 
     if args.uninstall:
@@ -217,7 +217,7 @@ def main() -> None:
 
     print("GlideKit — Windows Install")
     print("====================================")
-    print(f"Target: {CLIPPER_HOME}")
+    print(f"Target: {GLIDEKIT_HOME}")
 
     check_python()
     install_uv()
@@ -225,7 +225,7 @@ def main() -> None:
     setup_directories()
     check_gpu()
     check_wsl()
-    install_clipper_deps()
+    install_glidekit_deps()
 
     print()
     print("=" * 44)

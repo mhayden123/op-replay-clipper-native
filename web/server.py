@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="GlideKit")
-log = logging.getLogger("clipper.server")
+log = logging.getLogger("glidekit.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 # ---------------------------------------------------------------------------
@@ -49,19 +49,19 @@ STANDALONE_RENDER_TYPES = {"forward", "wide", "driver", "360"}
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Base directory for all clipper data.
-CLIPPER_HOME = Path(os.environ.get("CLIPPER_HOME", Path.home() / ".glidekit"))
+# Base directory for all GlideKit data.
+GLIDEKIT_HOME = Path(os.environ.get("GLIDEKIT_HOME", Path.home() / ".glidekit"))
 
 # Where job output files are written.  Each job gets a subdirectory.
-OUTPUT_DIR = Path(os.environ.get("CLIPPER_OUTPUT_DIR", CLIPPER_HOME / "output"))
+OUTPUT_DIR = Path(os.environ.get("GLIDEKIT_OUTPUT_DIR", GLIDEKIT_HOME / "output"))
 
 # Where downloaded route data lives.
-DATA_DIR = Path(os.environ.get("CLIPPER_DATA_DIR", CLIPPER_HOME / "data"))
+DATA_DIR = Path(os.environ.get("GLIDEKIT_DATA_DIR", GLIDEKIT_HOME / "data"))
 
 # openpilot checkout used by clip.py.
-OPENPILOT_DIR = Path(os.environ.get("OPENPILOT_ROOT", CLIPPER_HOME / "openpilot"))
+OPENPILOT_DIR = Path(os.environ.get("OPENPILOT_ROOT", GLIDEKIT_HOME / "openpilot"))
 
-# Path to the clipper project root (where clip.py lives).
+# Path to the GlideKit project root (where clip.py lives).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Detect GPU by checking nvidia-smi at startup.
@@ -709,7 +709,7 @@ def _wsl_status_sync() -> dict[str, Any]:
         "wsl_installed": False,
         "distro_name": None,
         "distro_running": False,
-        "clipper_installed": False,
+        "glidekit_installed": False,
         "openpilot_installed": False,
     }
 
@@ -749,7 +749,7 @@ def _wsl_status_sync() -> dict[str, Any]:
 
     distro = result["distro_name"]
 
-    # Check if clipper is installed inside WSL
+    # Check if GlideKit is installed inside WSL
     code, _, _ = _wsl_run(
         ["-d", distro, "--", "test", "-f",
          os.path.expanduser("~/glidekit/clip.py").replace("\\", "/")],
@@ -762,10 +762,10 @@ def _wsl_status_sync() -> dict[str, Any]:
             timeout=5,
         )
     if code == 0:
-        result["clipper_installed"] = True
+        result["glidekit_installed"] = True
 
     # Check if openpilot is installed inside WSL
-    if result["clipper_installed"]:
+    if result["glidekit_installed"]:
         code, _, _ = _wsl_run(
             ["-d", distro, "--", "bash", "-c",
              "test -f ~/.glidekit/openpilot/.venv/bin/python"],
@@ -779,7 +779,7 @@ def _wsl_status_sync() -> dict[str, Any]:
 
 @app.get("/api/wsl/status")
 async def wsl_status() -> dict[str, Any]:
-    """Check WSL installation and clipper setup status."""
+    """Check WSL installation and GlideKit setup status."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _wsl_status_sync)
 
@@ -814,9 +814,9 @@ async def wsl_install() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to start WSL install: {e}")
 
 
-@app.post("/api/wsl/setup-clipper")
-async def wsl_setup_clipper() -> StreamingResponse:
-    """Install the clipper inside WSL. Streams progress via SSE."""
+@app.post("/api/wsl/setup-glidekit")
+async def wsl_setup_glidekit() -> StreamingResponse:
+    """Install GlideKit inside WSL. Streams progress via SSE."""
     if not IS_WINDOWS:
         raise HTTPException(status_code=400, detail="WSL setup is Windows-only")
 
@@ -827,13 +827,13 @@ async def wsl_setup_clipper() -> StreamingResponse:
     distro = status["distro_name"]
 
     async def setup_stream():
-        yield f"data: Starting clipper setup inside WSL ({distro})...\n\n"
+        yield f"data: Starting GlideKit setup inside WSL ({distro})...\n\n"
 
         setup_script = (
             "set -e; "
             "echo '==> Installing system packages'; "
             "sudo apt-get update -y && sudo apt-get install -y git curl build-essential; "
-            "echo '==> Cloning clipper'; "
+            "echo '==> Cloning GlideKit'; "
             "if [ -d ~/glidekit ]; then "
             "  cd ~/glidekit && git pull; "
             "else "
