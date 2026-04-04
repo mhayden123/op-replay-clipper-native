@@ -40,10 +40,10 @@ IS_LINUX = PLATFORM == "Linux"
 IS_MACOS = PLATFORM == "Darwin"
 IS_WINDOWS = PLATFORM == "Windows"
 
-# Render types that require openpilot (UI rendering engine)
-OPENPILOT_RENDER_TYPES = {"ui", "ui-alt", "driver-debug"}
+# Render types that require openpilot (UI rendering engine or camera calibration)
+OPENPILOT_RENDER_TYPES = {"ui", "ui-alt", "driver-debug", "forward_upon_wide", "360_forward_upon_wide"}
 # Render types that work with just Python + FFmpeg (no openpilot needed)
-STANDALONE_RENDER_TYPES = {"forward", "wide", "driver", "360", "forward_upon_wide", "360_forward_upon_wide"}
+STANDALONE_RENDER_TYPES = {"forward", "wide", "driver", "360"}
 
 # ---------------------------------------------------------------------------
 # Native configuration (replaces Docker env vars)
@@ -290,10 +290,10 @@ def _build_clip_cmd(job: Job, req: ClipRequestBody) -> tuple[list[str], str | No
                f"cd ~/.op-replay-clipper-native && {wsl_cmd_str}"]
         return cmd, None  # cwd=None for WSL, it handles its own directory
 
-    # Native execution
+    # Native execution — use python -u for unbuffered output on Windows
     uv_bin = _resolve_uv()
     cmd: list[str] = [
-        uv_bin, "run", "python", "clip.py",
+        uv_bin, "run", "python", "-u", "clip.py",
         req.render_type,
         req.route,
         "-o", output_path,
@@ -344,11 +344,18 @@ async def _run_clip(job: Job, req: ClipRequestBody) -> None:
         job.state = JobState.running
         job.logs.append(f"$ uv run python clip.py {req.render_type} {req.route} ...")
 
+        # PYTHONUNBUFFERED=1 forces unbuffered stdout/stderr in the child process.
+        # Without this, Python buffers output when stdout is a pipe (not a terminal),
+        # which causes missing logs and stats on Windows.
+        child_env = dict(os.environ)
+        child_env["PYTHONUNBUFFERED"] = "1"
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            env=child_env,
         )
 
         assert proc.stdout is not None
