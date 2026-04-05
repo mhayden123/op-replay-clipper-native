@@ -952,7 +952,7 @@ validate_install() {
     log_ok "openpilot venv: ${OPENPILOT_ROOT}/.venv/bin/python"
   else
     log_err "openpilot venv python not found"
-    ((errors++))
+    ((errors+=1))
   fi
 
   # Check scons build artifacts (Linux only — macOS may use different paths)
@@ -967,7 +967,7 @@ validate_install() {
         log_ok "scons target: ${target}"
       else
         log_err "scons target missing: ${target}"
-        ((errors++))
+        ((errors+=1))
       fi
     done
 
@@ -976,7 +976,7 @@ validate_install() {
       log_ok "patched pyray importable in openpilot venv"
     else
       log_err "patched pyray not importable"
-      ((errors++))
+      ((errors+=1))
     fi
   fi
 
@@ -993,7 +993,7 @@ validate_install() {
       log_ok "${tool}: available"
     else
       log_err "${tool}: not found"
-      ((errors++))
+      ((errors+=1))
     fi
   done
 
